@@ -19,6 +19,7 @@ class DocumentResponse(BaseModel):
     page_count: int | None
     chunk_count: int
     status: DocumentStatus
+    processing_error: str | None
     uploaded_by: UUID
     created_at: datetime
     updated_at: datetime
@@ -35,10 +36,34 @@ class UploaderResponse(BaseModel):
 
 class DocumentDetailsResponse(DocumentResponse):
     uploader: UploaderResponse | None = None
+    extracted_block_count: int = 0
 
 
 class DocumentListResponse(BaseModel):
     items: list[DocumentResponse]
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    total: int = Field(ge=0)
+    total_pages: int = Field(ge=0)
+
+
+class ProcessingResponse(BaseModel):
+    document_id: UUID
+    status: DocumentStatus
+    page_count: int | None
+    extracted_block_count: int
+    processing_error: str | None
+
+
+class DocumentContentItem(BaseModel):
+    page_number: int | None
+    sequence_index: int
+    content: str
+
+
+class DocumentContentResponse(BaseModel):
+    document_id: UUID
+    items: list[DocumentContentItem]
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)
     total: int = Field(ge=0)

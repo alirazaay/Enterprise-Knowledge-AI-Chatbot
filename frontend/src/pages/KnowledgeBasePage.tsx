@@ -1,9 +1,17 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ApiError } from '../services/api'
-import { deleteDocument, downloadDocument, getDocument, listDocuments, uploadDocument } from '../services/documents'
-import type { DocumentDetails, DocumentRecord } from '../types/documents'
 import { useAuth } from '../hooks/useAuth'
+import { ApiError } from '../services/api'
+import {
+  deleteDocument,
+  downloadDocument,
+  getDocument,
+  getDocumentContent,
+  listDocuments,
+  processDocument,
+  uploadDocument,
+} from '../services/documents'
+import type { DocumentContentResponse, DocumentDetails, DocumentRecord } from '../types/documents'
 
 const maxUploadSizeMb = Number(import.meta.env.VITE_MAX_UPLOAD_SIZE_MB ?? 25)
 const supportedExtensions = ['.pdf', '.docx']
@@ -25,7 +33,10 @@ function formatDate(value: string): string {
 }
 
 function statusLabel(status: DocumentRecord['status']): string {
-  return status.charAt(0).toUpperCase() + status.slice(1)
+  if (status === 'processing') return 'Processing...'
+  if (status === 'processed') return 'Processed'
+  if (status === 'failed') return 'Processing Failed'
+  return 'Uploaded'
 }
 
 export default function KnowledgeBasePage() {
@@ -38,9 +49,12 @@ export default function KnowledgeBasePage() {
   const [title, setTitle] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
+  const [processingId, setProcessingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [details, setDetails] = useState<DocumentDetails | null>(null)
+  const [content, setContent] = useState<DocumentContentResponse | null>(null)
+  const [contentLoading, setContentLoading] = useState(false)
 
   useEffect(() => {
     if (!token) return
@@ -125,7 +139,7 @@ export default function KnowledgeBasePage() {
       setFile(null)
       setTitle('')
       if (inputRef.current) inputRef.current.value = ''
-      setSuccess('Document uploaded successfully.')
+      setSuccess('Document uploaded successfully. Processing has not started.')
       await loadDocuments()
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 401) {
@@ -147,6 +161,43 @@ export default function KnowledgeBasePage() {
         logout()
         navigate('/login', { replace: true })
       } else setError('Unable to load document details.')
+    }
+  }
+
+  const handleProcess = async (id: string) => {
+    if (!token) return
+    setProcessingId(id)
+    setError('')
+    setSuccess('')
+    try {
+      const result = await processDocument(token, id)
+      if (result.status === 'processed') setSuccess('Document processed successfully.')
+      else setError(result.processing_error ?? 'Document processing failed.')
+      await loadDocuments()
+      if (details?.id === id) await handleDetails(id)
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        logout()
+        navigate('/login', { replace: true })
+      } else if (requestError instanceof ApiError) setError(requestError.message)
+      else setError('Unable to process document.')
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  const handleContent = async (id: string) => {
+    if (!token) return
+    setContentLoading(true)
+    try {
+      setContent(await getDocumentContent(token, id))
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        logout()
+        navigate('/login', { replace: true })
+      } else setError('Unable to load extracted content.')
+    } finally {
+      setContentLoading(false)
     }
   }
 
@@ -182,7 +233,10 @@ export default function KnowledgeBasePage() {
     }
   }
 
-  const selectedLabel = useMemo(() => (file ? `${file.name} · ${formatBytes(file.size)}` : 'Choose a PDF or DOCX file'), [file])
+  const selectedLabel = useMemo(
+    () => (file ? `${file.name} · ${formatBytes(file.size)}` : 'Choose a PDF or DOCX file'),
+    [file],
+  )
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-100">
@@ -191,7 +245,7 @@ export default function KnowledgeBasePage() {
           <div>
             <p className="text-sm font-medium uppercase tracking-[0.2em] text-cyan-400">Knowledge workspace</p>
             <h1 className="mt-3 text-3xl font-semibold tracking-tight">Knowledge Base</h1>
-            <p className="mt-2 text-slate-400">Upload enterprise documents for future processing and retrieval.</p>
+            <p className="mt-2 text-slate-400">Upload documents, then explicitly process them for text inspection.</p>
           </div>
           <button className="self-start rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-cyan-400 sm:self-auto" onClick={() => navigate('/dashboard')}>
             Back to dashboard
@@ -214,7 +268,7 @@ export default function KnowledgeBasePage() {
               </label>
             </div>
             <button className="rounded-lg bg-cyan-400 px-5 py-3 font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50" disabled={!file || isUploading} onClick={() => void handleUpload()}>
-              {isUploading ? 'Uploading…' : 'Upload document'}
+              {isUploading ? 'Uploading...' : 'Upload document'}
             </button>
           </div>
           {error && <p className="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">{error}</p>}
@@ -225,18 +279,20 @@ export default function KnowledgeBasePage() {
           <div className="flex items-center justify-between border-b border-slate-800 px-6 py-5">
             <div><h2 className="font-semibold">Documents</h2><p className="mt-1 text-sm text-slate-500">{total} document{total === 1 ? '' : 's'}</p></div>
           </div>
-          {isLoading ? <p className="px-6 py-12 text-center text-slate-400">Loading documents…</p> : documents.length === 0 ? <p className="px-6 py-12 text-center text-slate-400">No knowledge documents uploaded yet.</p> : (
+          {isLoading ? <p className="px-6 py-12 text-center text-slate-400">Loading documents...</p> : documents.length === 0 ? <p className="px-6 py-12 text-center text-slate-400">No knowledge documents uploaded yet.</p> : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[700px] text-left text-sm">
+              <table className="w-full min-w-[800px] text-left text-sm">
                 <thead className="bg-slate-950/50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-6 py-4">Document</th><th className="px-6 py-4">Type</th><th className="px-6 py-4">Size</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Uploaded</th><th className="px-6 py-4">Actions</th></tr></thead>
-                <tbody className="divide-y divide-slate-800">{documents.map((document) => <tr key={document.id} className="text-slate-300"><td className="px-6 py-4"><p className="font-medium text-slate-100">{document.title}</p><p className="mt-1 text-xs text-slate-500">{document.file_name}</p></td><td className="px-6 py-4 uppercase">{document.file_type}</td><td className="px-6 py-4">{formatBytes(document.file_size)}</td><td className="px-6 py-4"><span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs text-cyan-300">{statusLabel(document.status)}</span></td><td className="px-6 py-4">{formatDate(document.created_at)}</td><td className="px-6 py-4"><div className="flex gap-3"><button className="text-cyan-300 hover:text-cyan-200" onClick={() => void handleDetails(document.id)}>Details</button><button className="text-slate-300 hover:text-white" onClick={() => void handleDownload(document)}>Download</button><button className="text-red-300 hover:text-red-200" onClick={() => void handleDelete(document)}>Delete</button></div></td></tr>)}</tbody>
+                <tbody className="divide-y divide-slate-800">{documents.map((document) => <tr key={document.id} className="text-slate-300"><td className="px-6 py-4"><p className="font-medium text-slate-100">{document.title}</p><p className="mt-1 text-xs text-slate-500">{document.file_name}</p></td><td className="px-6 py-4 uppercase">{document.file_type}</td><td className="px-6 py-4">{formatBytes(document.file_size)}</td><td className="px-6 py-4"><span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs text-cyan-300">{statusLabel(document.status)}</span></td><td className="px-6 py-4">{formatDate(document.created_at)}</td><td className="px-6 py-4"><div className="flex flex-wrap gap-3"><button className="text-cyan-300 hover:text-cyan-200" onClick={() => void handleDetails(document.id)}>Details</button>{document.status === 'processed' && <button className="text-cyan-300 hover:text-cyan-200" onClick={() => void handleContent(document.id)}>Content</button>}{document.status === 'uploaded' || document.status === 'failed' ? <button className="text-amber-300 hover:text-amber-200" disabled={processingId === document.id} onClick={() => void handleProcess(document.id)}>{processingId === document.id ? 'Processing...' : document.status === 'failed' ? 'Retry' : 'Process'}</button> : document.status === 'processing' ? <span className="text-amber-300">Processing...</span> : null}<button className="text-slate-300 hover:text-white" onClick={() => void handleDownload(document)}>Download</button><button className="text-red-300 hover:text-red-200" onClick={() => void handleDelete(document)}>Delete</button></div></td></tr>)}</tbody>
               </table>
             </div>
           )}
         </section>
       </div>
 
-      {details && <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-950/80 px-6" role="dialog" aria-modal="true"><div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-400">Document details</p><h2 className="mt-2 text-2xl font-semibold">{details.title}</h2></div><button className="text-2xl text-slate-400 hover:text-white" onClick={() => setDetails(null)} aria-label="Close details">×</button></div><dl className="mt-6 grid grid-cols-2 gap-5 text-sm"><div><dt className="text-slate-500">Filename</dt><dd className="mt-1 break-words text-slate-200">{details.file_name}</dd></div><div><dt className="text-slate-500">Type</dt><dd className="mt-1 uppercase text-slate-200">{details.file_type}</dd></div><div><dt className="text-slate-500">Size</dt><dd className="mt-1 text-slate-200">{formatBytes(details.file_size)}</dd></div><div><dt className="text-slate-500">Status</dt><dd className="mt-1 text-slate-200">{statusLabel(details.status)}</dd></div><div><dt className="text-slate-500">Page count</dt><dd className="mt-1 text-slate-200">{details.page_count ?? 'Not processed yet'}</dd></div><div><dt className="text-slate-500">Chunk count</dt><dd className="mt-1 text-slate-200">{details.chunk_count}</dd></div><div><dt className="text-slate-500">Uploaded</dt><dd className="mt-1 text-slate-200">{formatDate(details.created_at)}</dd></div>{details.uploader && <div><dt className="text-slate-500">Uploader</dt><dd className="mt-1 text-slate-200">{details.uploader.name}</dd></div>}</dl></div></div>}
+      {details && <div className="fixed inset-0 z-10 flex items-center justify-center bg-slate-950/80 px-6" role="dialog" aria-modal="true"><div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-400">Document details</p><h2 className="mt-2 text-2xl font-semibold">{details.title}</h2></div><button className="text-2xl text-slate-400 hover:text-white" onClick={() => setDetails(null)} aria-label="Close details">×</button></div><dl className="mt-6 grid grid-cols-2 gap-5 text-sm"><div><dt className="text-slate-500">Filename</dt><dd className="mt-1 break-words text-slate-200">{details.file_name}</dd></div><div><dt className="text-slate-500">Type</dt><dd className="mt-1 uppercase text-slate-200">{details.file_type}</dd></div><div><dt className="text-slate-500">Size</dt><dd className="mt-1 text-slate-200">{formatBytes(details.file_size)}</dd></div><div><dt className="text-slate-500">Status</dt><dd className="mt-1 text-slate-200">{statusLabel(details.status)}</dd></div><div><dt className="text-slate-500">Pages</dt><dd className="mt-1 text-slate-200">{details.page_count ?? 'Not available for this format'}</dd></div><div><dt className="text-slate-500">Extracted blocks</dt><dd className="mt-1 text-slate-200">{details.extracted_block_count}</dd></div><div><dt className="text-slate-500">Chunk count</dt><dd className="mt-1 text-slate-200">{details.chunk_count}</dd></div><div><dt className="text-slate-500">Uploaded</dt><dd className="mt-1 text-slate-200">{formatDate(details.created_at)}</dd></div>{details.uploader && <div><dt className="text-slate-500">Uploader</dt><dd className="mt-1 text-slate-200">{details.uploader.name}</dd></div>}</dl>{details.processing_error && <p className="mt-5 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">{details.processing_error}</p>}<div className="mt-6 flex flex-wrap gap-3">{(details.status === 'uploaded' || details.status === 'failed') && <button className="rounded-lg bg-amber-400 px-4 py-2 font-semibold text-slate-950" onClick={() => void handleProcess(details.id)}>{details.status === 'failed' ? 'Retry processing' : 'Process document'}</button>}{details.status === 'processed' && <button className="rounded-lg border border-cyan-400 px-4 py-2 text-cyan-300" onClick={() => void handleContent(details.id)}>View extracted content</button>}</div></div></div>}
+
+      {content && <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950/80 px-6" role="dialog" aria-modal="true"><div className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"><div className="flex items-center justify-between"><div><p className="text-sm text-cyan-400">Extracted content</p><h2 className="mt-2 text-2xl font-semibold">Source blocks</h2></div><button className="text-2xl text-slate-400 hover:text-white" onClick={() => setContent(null)} aria-label="Close extracted content">×</button></div>{contentLoading ? <p className="py-10 text-center text-slate-400">Loading extracted content...</p> : <div className="mt-6 space-y-4">{content.items.map((item) => <article key={item.sequence_index} className="rounded-lg border border-slate-800 bg-slate-950 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-cyan-400">{item.page_number === null ? `Section ${item.sequence_index + 1}` : `Page ${item.page_number}`}</p><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-300">{item.content}</p></article>)}</div>}</div></div>}
     </main>
   )
 }

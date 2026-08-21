@@ -6,6 +6,7 @@ def test_database_metadata_contains_expected_tables() -> None:
         "users",
         "documents",
         "document_chunks",
+        "document_pages",
         "conversations",
         "messages",
     }

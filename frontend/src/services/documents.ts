@@ -1,5 +1,5 @@
 import { ApiError, api } from './api'
-import type { DocumentDetails, DocumentListResponse, DocumentRecord } from '../types/documents'
+import type { DocumentContentResponse, DocumentDetails, DocumentListResponse, DocumentRecord } from '../types/documents'
 
 export function uploadDocument(token: string, file: File, title?: string): Promise<DocumentRecord> {
   const form = new FormData()
@@ -18,6 +18,14 @@ export function listDocuments(token: string, page = 1, pageSize = 20): Promise<D
 
 export function getDocument(token: string, id: string): Promise<DocumentDetails> {
   return api.requestWithToken<DocumentDetails>(`/documents/${id}`, token)
+}
+
+export function processDocument(token: string, id: string): Promise<{ document_id: string; status: string; page_count: number | null; extracted_block_count: number; processing_error: string | null }> {
+  return api.requestWithToken(`/documents/${id}/process`, token, { method: 'POST' })
+}
+
+export function getDocumentContent(token: string, id: string): Promise<DocumentContentResponse> {
+  return api.requestWithToken<DocumentContentResponse>(`/documents/${id}/content`, token)
 }
 
 export function deleteDocument(token: string, id: string): Promise<void> {

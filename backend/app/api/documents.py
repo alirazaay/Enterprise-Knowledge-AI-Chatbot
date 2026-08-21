@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.dependencies import require_admin
 from app.core.config import get_settings
@@ -17,9 +17,17 @@ from app.core.database import get_db
 from app.core.storage import FileStorageService, StorageError, UploadSizeExceededError
 from app.core.storage_dependencies import get_storage_service
 from app.models.document import Document
+from app.models.document_page import DocumentPage
 from app.models.enums import DocumentStatus
 from app.models.user import User
-from app.schemas.document import DocumentDetailsResponse, DocumentListResponse, DocumentResponse
+from app.schemas.document import (
+    DocumentContentResponse,
+    DocumentDetailsResponse,
+    DocumentListResponse,
+    DocumentResponse,
+    ProcessingResponse,
+)
+from app.services.document_processing import DocumentProcessingService, ProcessingNotFoundError
 from app.services.documents import DocumentService, DocumentServiceError, max_upload_bytes, validate_upload_metadata
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -27,6 +35,10 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 def _service(db: Session, storage: FileStorageService) -> DocumentService:
     return DocumentService(db, storage, max_upload_bytes(get_settings().max_upload_size_mb))
+
+
+def _processing_service(db: Session, storage: FileStorageService) -> DocumentProcessingService:
+    return DocumentProcessingService(db, storage)
 
 
 def _not_found() -> HTTPException:
@@ -40,7 +52,7 @@ async def upload_document(
     db: Annotated[Session, Depends(get_db)] = None,
     admin: Annotated[User, Depends(require_admin)] = None,
     storage: Annotated[FileStorageService, Depends(get_storage_service)] = None,
-) -> Document:
+) -> DocumentDetailsResponse:
     """Upload one PDF or DOCX document for later processing."""
 
     try:
@@ -93,7 +105,59 @@ def get_document(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document service unavailable.") from exc
     if document is None:
         raise _not_found()
-    return document
+    block_count = db.scalar(select(func.count()).select_from(DocumentPage).where(DocumentPage.document_id == document.id)) or 0
+    response = DocumentDetailsResponse.model_validate(document)
+    return response.model_copy(update={"extracted_block_count": int(block_count)})
+
+
+@router.post("/{document_id}/process", response_model=ProcessingResponse)
+def process_document(
+    document_id: UUID,
+    db: Annotated[Session, Depends(get_db)] = None,
+    _: Annotated[User, Depends(require_admin)] = None,
+    storage: Annotated[FileStorageService, Depends(get_storage_service)] = None,
+) -> ProcessingResponse:
+    """Explicitly parse an uploaded PDF or DOCX document."""
+
+    try:
+        result = _processing_service(db, storage).process(document_id)
+    except ProcessingNotFoundError as exc:
+        raise _not_found() from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document processing unavailable.") from exc
+    return ProcessingResponse(
+        document_id=result.document.id,
+        status=result.document.status,
+        page_count=result.document.page_count,
+        extracted_block_count=result.block_count,
+        processing_error=result.document.processing_error,
+    )
+
+
+@router.get("/{document_id}/content", response_model=DocumentContentResponse)
+def get_document_content(
+    document_id: UUID,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    db: Annotated[Session, Depends(get_db)] = None,
+    _: Annotated[User, Depends(require_admin)] = None,
+) -> DocumentContentResponse:
+    """Inspect persisted extracted pages/sections without exposing chunks."""
+
+    try:
+        items, total = DocumentProcessingService(db, get_storage_service()).content(document_id, page, page_size)
+    except ProcessingNotFoundError as exc:
+        raise _not_found() from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document content unavailable.") from exc
+    return DocumentContentResponse(
+        document_id=document_id,
+        items=[{"page_number": item.page_number, "sequence_index": item.sequence_index, "content": item.content} for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=ceil(total / page_size) if total else 0,
+    )
 
 
 @router.get("/{document_id}/file")
