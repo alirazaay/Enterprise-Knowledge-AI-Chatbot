@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+env/
+backend/.pytest_cache/
+backend/.mypy_cache/
+**/.pytest_cache/
+/.uv-cache/
+*.egg-info/
+
+# Environment files (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Node / Vite
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.tmp/
+npm-debug.log*
+
+# Uploaded documents and local model/cache artifacts
+uploads/
+data/uploads/
+models/
+cache/
+*.safetensors
+*.onnx
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
