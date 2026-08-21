@@ -11,6 +11,7 @@ backend/.mypy_cache/
 **/.pytest_cache/
 /.uv-cache/
 *.egg-info/
+backend/alembic/__pycache__/
 
 # Environment files (keep .env.example tracked)
 .env

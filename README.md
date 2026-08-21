@@ -1,10 +1,10 @@
 # Enterprise Knowledge AI
 
-Enterprise Knowledge AI is the foundation for a modular enterprise knowledge assistant. Later phases will add document ingestion and retrieval-augmented answers with citations; Phase 1 establishes only the development environment and application skeleton.
+Enterprise Knowledge AI is the foundation for a modular enterprise knowledge assistant. Later phases will add document ingestion and retrieval-augmented answers with citations.
 
 ## Current status
 
-Phase 1 — project foundation. The repository currently includes a minimal FastAPI backend with a health check and a React/TypeScript/Vite frontend placeholder. No database, authentication, document processing, embeddings, vector search, LLM integration, or chat features are implemented.
+Phase 2 complete — Database Foundation. The repository now includes a migration-first PostgreSQL + pgvector layer with SQLAlchemy models, Alembic migrations, and a database health check. Authentication, document processing, embeddings, vector retrieval, LLM integration, and chat remain unimplemented.
 
 ## Planned architecture
 
@@ -13,8 +13,9 @@ The monorepo keeps the presentation layer (`frontend`) separate from the API (`b
 ## Technology stack
 
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Python, FastAPI, Uvicorn, Pydantic Settings
-- Planned later: PostgreSQL, pgvector, SQLAlchemy, Alembic, Sentence Transformers, Ollama, Qwen
+- Backend: Python, FastAPI, Uvicorn, Pydantic Settings, SQLAlchemy 2.x, Alembic, psycopg 3, pgvector
+- Infrastructure: PostgreSQL + pgvector through Docker Compose
+- Planned later: Sentence Transformers, Ollama, Qwen
 
 ## Repository structure
 
@@ -22,6 +23,8 @@ The monorepo keeps the presentation layer (`frontend`) separate from the API (`b
 .
 ├── backend/
 │   ├── app/                 # FastAPI application package
+│   ├── alembic/             # Migration environment and revisions
+│   ├── alembic.ini
 │   ├── tests/               # Backend tests
 │   ├── .env.example
 │   ├── pyproject.toml
@@ -32,6 +35,8 @@ The monorepo keeps the presentation layer (`frontend`) separate from the API (`b
 │   ├── package.json
 │   └── vite.config.ts
 ├── docs/
+├── docker-compose.yml       # Local PostgreSQL + pgvector
+├── .env.example              # Compose development variables
 ├── .gitignore
 └── README.md
 ```
@@ -43,9 +48,52 @@ Copy the example files before running locally:
 ```powershell
 Copy-Item backend/.env.example backend/.env
 Copy-Item frontend/.env.example frontend/.env
+Copy-Item .env.example .env
 ```
 
-Phase 1 does not require a database or Ollama. Their settings are present as placeholders for later phases. Secrets must remain in local `.env` files, which are ignored by Git.
+The backend `DATABASE_URL` and Compose `POSTGRES_*` values are development placeholders. Replace them locally as needed; do not commit `.env` files. Ollama settings remain placeholders and are not used.
+
+## PostgreSQL and pgvector
+
+Docker is required for the local database. The Compose service uses the standard `pgvector/pgvector:pg17` image and a named persistent volume. The initial Alembic migration enables the `vector` extension and creates the five Phase 2 tables.
+
+Start and stop the database:
+
+```powershell
+docker compose up -d
+docker compose ps
+docker compose down
+```
+
+Apply and inspect migrations from `backend`:
+
+```powershell
+alembic upgrade head
+alembic current
+alembic history
+alembic downgrade -1
+alembic upgrade head
+```
+
+The database health endpoint is `GET http://127.0.0.1:8000/health/db`; the original `/health` endpoint remains independent of database availability.
+
+### Database architecture
+
+```mermaid
+erDiagram
+    USERS ||--o{ DOCUMENTS : uploads
+    USERS ||--o{ CONVERSATIONS : owns
+    DOCUMENTS ||--o{ DOCUMENT_CHUNKS : contains
+    CONVERSATIONS ||--o{ MESSAGES : contains
+
+    USERS { uuid id PK; string email UK; string role }
+    DOCUMENTS { uuid id PK; uuid uploaded_by FK; string status }
+    DOCUMENT_CHUNKS { uuid id PK; uuid document_id FK; vector embedding }
+    CONVERSATIONS { uuid id PK; uuid user_id FK }
+    MESSAGES { uuid id PK; uuid conversation_id FK; string role; jsonb sources }
+```
+
+Tables currently implemented: `users`, `documents`, `document_chunks`, `conversations`, and `messages`.
 
 ## Run the backend
 

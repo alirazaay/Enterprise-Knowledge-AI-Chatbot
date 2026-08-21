@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     frontend_url: str = "http://localhost:5173"
-    database_url: str = "postgresql+psycopg://user:password@localhost:5432/enterprise_knowledge_ai"
+    database_url: str | None = None
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b"
     embedding_model: str = "all-MiniLM-L6-v2"
