@@ -1,19 +1,18 @@
 # Enterprise Knowledge AI
 
-Enterprise Knowledge AI is the foundation for a modular enterprise knowledge assistant. Later phases will add document ingestion and retrieval-augmented answers with citations.
+Enterprise Knowledge AI is a modular enterprise knowledge assistant foundation. Later phases will add document ingestion and retrieval-augmented answers with citations.
 
 ## Current status
 
-Phase 2 complete — Database Foundation. The repository now includes a migration-first PostgreSQL + pgvector layer with SQLAlchemy models, Alembic migrations, and a database health check. Authentication, document processing, embeddings, vector retrieval, LLM integration, and chat remain unimplemented.
+Phase 3 complete — Authentication Foundation. The project includes PostgreSQL/pgvector persistence, SQLAlchemy/Alembic migrations, secure email/password authentication, Argon2 password hashing, JWT bearer tokens, an admin creation command, and a minimal protected frontend flow.
 
-## Planned architecture
-
-The monorepo keeps the presentation layer (`frontend`) separate from the API (`backend`). Future retrieval and model integrations should be implemented behind backend service interfaces so Ollama can be replaced by OpenAI, Gemini, AWS Bedrock, or another provider without changing API consumers.
+Document processing, embeddings, vector retrieval, LLM integration, citations, and chat remain unimplemented.
 
 ## Technology stack
 
-- Frontend: React, TypeScript, Vite, Tailwind CSS
+- Frontend: React, TypeScript, Vite, Tailwind CSS, React Router
 - Backend: Python, FastAPI, Uvicorn, Pydantic Settings, SQLAlchemy 2.x, Alembic, psycopg 3, pgvector
+- Authentication: pwdlib/Argon2, PyJWT, HTTP Bearer
 - Infrastructure: PostgreSQL + pgvector through Docker Compose
 - Planned later: Sentence Transformers, Ollama, Qwen
 
@@ -22,28 +21,32 @@ The monorepo keeps the presentation layer (`frontend`) separate from the API (`b
 ```text
 .
 ├── backend/
-│   ├── app/                 # FastAPI application package
+│   ├── app/
+│   │   ├── api/             # Health and authentication endpoints
+│   │   ├── core/            # Settings, database, security
+│   │   ├── models/          # SQLAlchemy models
+│   │   ├── schemas/         # Pydantic request/response models
+│   │   ├── services/        # Focused authentication services
+│   │   └── scripts/         # Operational CLI commands
 │   ├── alembic/             # Migration environment and revisions
-│   ├── alembic.ini
-│   ├── tests/               # Backend tests
+│   ├── tests/
 │   ├── .env.example
 │   ├── pyproject.toml
 │   └── README.md
 ├── frontend/
-│   ├── src/                 # React application source
-│   ├── .env.example
-│   ├── package.json
-│   └── vite.config.ts
+│   ├── src/context/         # Authentication provider
+│   ├── src/pages/           # Login and protected placeholder pages
+│   ├── src/services/        # API and auth clients
+│   ├── src/types/
+│   └── package.json
 ├── docs/
-├── docker-compose.yml       # Local PostgreSQL + pgvector
-├── .env.example              # Compose development variables
+├── docker-compose.yml
+├── .env.example
 ├── .gitignore
 └── README.md
 ```
 
 ## Environment configuration
-
-Copy the example files before running locally:
 
 ```powershell
 Copy-Item backend/.env.example backend/.env
@@ -51,33 +54,78 @@ Copy-Item frontend/.env.example frontend/.env
 Copy-Item .env.example .env
 ```
 
-The backend `DATABASE_URL` and Compose `POSTGRES_*` values are development placeholders. Replace them locally as needed; do not commit `.env` files. Ollama settings remain placeholders and are not used.
+Replace local placeholders as needed. `.env` files are ignored by Git; `.env.example` files are intentionally tracked. Authentication requires `JWT_SECRET_KEY` of at least 32 characters. `JWT_ALGORITHM` defaults to `HS256`, and `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` defaults to 60. Never commit or log the real secret.
 
-## PostgreSQL and pgvector
+## PostgreSQL and migrations
 
-Docker is required for the local database. The Compose service uses the standard `pgvector/pgvector:pg17` image and a named persistent volume. The initial Alembic migration enables the `vector` extension and creates the five Phase 2 tables.
-
-Start and stop the database:
+Docker is required for the local database. The Compose service uses `pgvector/pgvector:pg17` with a persistent named volume.
 
 ```powershell
 docker compose up -d
 docker compose ps
-docker compose down
+
+cd backend
+uv sync --extra dev
+uv run alembic upgrade head
+uv run alembic current
+uv run alembic history
 ```
 
-Apply and inspect migrations from `backend`:
+Rollback and re-apply:
 
 ```powershell
-alembic upgrade head
-alembic current
-alembic history
-alembic downgrade -1
-alembic upgrade head
+uv run alembic downgrade -1
+uv run alembic upgrade head
 ```
 
-The database health endpoint is `GET http://127.0.0.1:8000/health/db`; the original `/health` endpoint remains independent of database availability.
+## Backend
 
-### Database architecture
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Endpoints:
+
+- `GET /health` — application health, independent of PostgreSQL
+- `GET /health/db` — database connectivity
+- `POST /auth/login` — email/password login
+- `GET /auth/me` — current authenticated user
+
+Swagger: <http://127.0.0.1:8000/docs>
+
+## Create the first admin
+
+After migrations are applied, run:
+
+```powershell
+cd backend
+python -m app.scripts.create_admin
+```
+
+The command prompts for name, email, and password without storing plaintext credentials in source code. Passwords must be at least 8 characters. Duplicate email addresses are rejected.
+
+## Frontend authentication
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Unauthenticated users are sent to `/login`. Successful login stores the access token through one centralized auth service, restores the user through `/auth/me` on startup, and redirects to `/dashboard`. Logout clears the token and returns to login. The API base URL comes from `VITE_API_BASE_URL`.
+
+Production checks:
+
+```powershell
+npm run lint
+npm run build
+```
+
+## Database architecture
 
 ```mermaid
 erDiagram
@@ -94,34 +142,3 @@ erDiagram
 ```
 
 Tables currently implemented: `users`, `documents`, `document_chunks`, `conversations`, and `messages`.
-
-## Run the backend
-
-From `backend`:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Health check: <http://127.0.0.1:8000/health>
-
-## Run the frontend
-
-From `frontend`:
-
-```powershell
-npm install
-npm run dev
-```
-
-Production checks:
-
-```powershell
-npm run lint
-npm run build
-```
-
-The frontend API base URL is configured through `VITE_API_BASE_URL`; application code should use the shared API client rather than hard-coding URLs.

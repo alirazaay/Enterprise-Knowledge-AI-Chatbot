@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:7b"
     embedding_model: str = "all-MiniLM-L6-v2"
     log_level: str = "INFO"
+    jwt_secret_key: str | None = None
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -31,6 +34,18 @@ class Settings(BaseSettings):
         """Return configured frontend origins for CORS."""
 
         return [origin.strip() for origin in self.frontend_url.split(",") if origin.strip()]
+
+    def require_jwt_secret(self) -> str:
+        """Return the JWT secret or fail clearly at the first auth operation."""
+
+        if not self.jwt_secret_key:
+            raise RuntimeError(
+                "JWT_SECRET_KEY is required for authentication. "
+                "Set it in backend/.env or the process environment."
+            )
+        if len(self.jwt_secret_key) < 32:
+            raise RuntimeError("JWT_SECRET_KEY must be at least 32 characters long.")
+        return self.jwt_secret_key
 
 
 @lru_cache
