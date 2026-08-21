@@ -4,15 +4,16 @@ Enterprise Knowledge AI is a modular enterprise knowledge assistant foundation. 
 
 ## Current status
 
-Phase 3 complete — Authentication Foundation. The project includes PostgreSQL/pgvector persistence, SQLAlchemy/Alembic migrations, secure email/password authentication, Argon2 password hashing, JWT bearer tokens, an admin creation command, and a minimal protected frontend flow.
+Phase 4 complete — Document Upload & File Management. The project includes PostgreSQL/pgvector persistence, secure admin authentication, local PDF/DOCX document storage, document metadata APIs, and a protected Knowledge Base frontend.
 
-Document processing, embeddings, vector retrieval, LLM integration, citations, and chat remain unimplemented.
+Document parsing, page counting, chunking, embeddings, vector retrieval, LLM integration, citations, and chat remain unimplemented.
 
 ## Technology stack
 
 - Frontend: React, TypeScript, Vite, Tailwind CSS, React Router
 - Backend: Python, FastAPI, Uvicorn, Pydantic Settings, SQLAlchemy 2.x, Alembic, psycopg 3, pgvector
 - Authentication: pwdlib/Argon2, PyJWT, HTTP Bearer
+- Storage: configurable local filesystem storage with UUID-based filenames
 - Infrastructure: PostgreSQL + pgvector through Docker Compose
 - Planned later: Sentence Transformers, Ollama, Qwen
 
@@ -26,7 +27,7 @@ Document processing, embeddings, vector retrieval, LLM integration, citations, a
 │   │   ├── core/            # Settings, database, security
 │   │   ├── models/          # SQLAlchemy models
 │   │   ├── schemas/         # Pydantic request/response models
-│   │   ├── services/        # Focused authentication services
+│   │   ├── services/        # Authentication and document services
 │   │   └── scripts/         # Operational CLI commands
 │   ├── alembic/             # Migration environment and revisions
 │   ├── tests/
@@ -54,7 +55,7 @@ Copy-Item frontend/.env.example frontend/.env
 Copy-Item .env.example .env
 ```
 
-Replace local placeholders as needed. `.env` files are ignored by Git; `.env.example` files are intentionally tracked. Authentication requires `JWT_SECRET_KEY` of at least 32 characters. `JWT_ALGORITHM` defaults to `HS256`, and `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` defaults to 60. Never commit or log the real secret.
+Replace local placeholders as needed. `.env` files are ignored by Git; `.env.example` files are intentionally tracked. Authentication requires `JWT_SECRET_KEY` of at least 32 characters. `JWT_ALGORITHM` defaults to `HS256`, and `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` defaults to 60. `UPLOAD_DIR` defaults to `uploads`, and `MAX_UPLOAD_SIZE_MB` defaults to 25. Never commit or log the real secret.
 
 ## PostgreSQL and migrations
 
@@ -97,6 +98,20 @@ Endpoints:
 
 Swagger: <http://127.0.0.1:8000/docs>
 
+## Document upload and Knowledge Base
+
+Authenticated admins can manage PDF and DOCX documents through:
+
+- `POST /documents` — upload a document using multipart form data
+- `GET /documents` — list metadata with pagination and basic filters
+- `GET /documents/{id}` — inspect metadata
+- `GET /documents/{id}/file` — download the stored file
+- `DELETE /documents/{id}` — remove metadata and the physical file
+
+Files are streamed to the configured local storage directory using generated UUID filenames. Original filenames are stored only as metadata and are sanitized when returned for download. The default upload limit is 25 MB. The storage service is isolated behind a small interface so a later S3, Azure Blob, or Google Cloud Storage implementation can replace it.
+
+New files remain in the `uploaded` state with `page_count` unset and `chunk_count` equal to zero. This phase does not parse files or create chunks.
+
 ## Create the first admin
 
 After migrations are applied, run:
@@ -108,7 +123,7 @@ python -m app.scripts.create_admin
 
 The command prompts for name, email, and password without storing plaintext credentials in source code. Passwords must be at least 8 characters. Duplicate email addresses are rejected.
 
-## Frontend authentication
+## Frontend authentication and Knowledge Base
 
 ```powershell
 cd frontend
@@ -116,7 +131,7 @@ npm install
 npm run dev
 ```
 
-Unauthenticated users are sent to `/login`. Successful login stores the access token through one centralized auth service, restores the user through `/auth/me` on startup, and redirects to `/dashboard`. Logout clears the token and returns to login. The API base URL comes from `VITE_API_BASE_URL`.
+Unauthenticated users are sent to `/login`. Successful login stores the access token through one centralized auth service, restores the user through `/auth/me` on startup, and redirects to `/dashboard`. Admins can open `/knowledge-base` to upload, list, inspect, download, and delete documents. Logout clears the token and returns to login. The API base URL comes from `VITE_API_BASE_URL`.
 
 Production checks:
 

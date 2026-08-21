@@ -4,12 +4,11 @@ export const api = {
   baseUrl: apiBaseUrl.replace(/\/$/, ''),
   healthUrl: `${apiBaseUrl.replace(/\/$/, '')}/health`,
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers)
+    if (!(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
     const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...init.headers,
-      },
+      headers,
     })
 
     if (!response.ok) {
@@ -23,7 +22,14 @@ export const api = {
       throw new ApiError(message, response.status)
     }
 
+    if (response.status === 204) return undefined as T
     return (await response.json()) as T
+  },
+  async requestWithToken<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
+    return api.request<T>(path, {
+      ...init,
+      headers: { ...init.headers, Authorization: `Bearer ${token}` },
+    })
   },
 }
 

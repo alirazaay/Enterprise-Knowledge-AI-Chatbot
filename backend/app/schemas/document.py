@@ -1,0 +1,45 @@
+"""Safe document API schemas."""
+
+from datetime import datetime
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.enums import DocumentStatus
+
+
+class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str
+    file_name: str
+    file_type: str
+    file_size: int
+    page_count: int | None
+    chunk_count: int
+    status: DocumentStatus
+    uploaded_by: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class UploaderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    email: str
+    role: str
+
+
+class DocumentDetailsResponse(DocumentResponse):
+    uploader: UploaderResponse | None = None
+
+
+class DocumentListResponse(BaseModel):
+    items: list[DocumentResponse]
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    total: int = Field(ge=0)
+    total_pages: int = Field(ge=0)
