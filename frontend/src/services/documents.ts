@@ -1,5 +1,5 @@
 import { ApiError, api } from './api'
-import type { DocumentContentResponse, DocumentDetails, DocumentListResponse, DocumentRecord } from '../types/documents'
+import type { DocumentChunkResponse, DocumentContentResponse, DocumentDetails, DocumentListResponse, DocumentRecord } from '../types/documents'
 
 export function uploadDocument(token: string, file: File, title?: string): Promise<DocumentRecord> {
   const form = new FormData()
@@ -22,6 +22,14 @@ export function getDocument(token: string, id: string): Promise<DocumentDetails>
 
 export function processDocument(token: string, id: string): Promise<{ document_id: string; status: string; page_count: number | null; extracted_block_count: number; processing_error: string | null }> {
   return api.requestWithToken(`/documents/${id}/process`, token, { method: 'POST' })
+}
+
+export function indexDocument(token: string, id: string): Promise<{ document_id: string; status: string; chunk_count: number; embedding_model: string; embedding_dimension: number; indexing_error: string | null }> {
+  return api.requestWithToken(`/documents/${id}/index`, token, { method: 'POST' })
+}
+
+export function getDocumentChunks(token: string, id: string, page = 1, pageSize = 20): Promise<DocumentChunkResponse> {
+  return api.requestWithToken<DocumentChunkResponse>(`/documents/${id}/chunks?page=${page}&page_size=${pageSize}`, token)
 }
 
 export function getDocumentContent(token: string, id: string): Promise<DocumentContentResponse> {

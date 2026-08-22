@@ -18,16 +18,20 @@ from app.core.storage import FileStorageService, StorageError, UploadSizeExceede
 from app.core.storage_dependencies import get_storage_service
 from app.models.document import Document
 from app.models.document_page import DocumentPage
+from app.models.document_chunk import DocumentChunk
 from app.models.enums import DocumentStatus
 from app.models.user import User
 from app.schemas.document import (
     DocumentContentResponse,
+    DocumentChunkListResponse,
     DocumentDetailsResponse,
     DocumentListResponse,
     DocumentResponse,
+    IndexingResponse,
     ProcessingResponse,
 )
 from app.services.document_processing import DocumentProcessingService, ProcessingNotFoundError
+from app.services.document_indexing import DocumentIndexingService, IndexingEligibilityError, IndexingNotFoundError
 from app.services.documents import DocumentService, DocumentServiceError, max_upload_bytes, validate_upload_metadata
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -107,7 +111,16 @@ def get_document(
         raise _not_found()
     block_count = db.scalar(select(func.count()).select_from(DocumentPage).where(DocumentPage.document_id == document.id)) or 0
     response = DocumentDetailsResponse.model_validate(document)
-    return response.model_copy(update={"extracted_block_count": int(block_count)})
+    settings = get_settings()
+    return response.model_copy(
+        update={
+            "extracted_block_count": int(block_count),
+            "embedding_model": settings.embedding_model,
+            "embedding_dimension": settings.embedding_dimension,
+            "chunk_size_words": settings.chunk_size_words,
+            "chunk_overlap_words": settings.chunk_overlap_words,
+        }
+    )
 
 
 @router.post("/{document_id}/process", response_model=ProcessingResponse)
@@ -153,6 +166,71 @@ def get_document_content(
     return DocumentContentResponse(
         document_id=document_id,
         items=[{"page_number": item.page_number, "sequence_index": item.sequence_index, "content": item.content} for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=ceil(total / page_size) if total else 0,
+    )
+
+
+@router.post("/{document_id}/index", response_model=IndexingResponse)
+def index_document(
+    document_id: UUID,
+    db: Annotated[Session, Depends(get_db)] = None,
+    _: Annotated[User, Depends(require_admin)] = None,
+) -> IndexingResponse:
+    """Generate semantic chunks and local pgvector embeddings for a processed document."""
+
+    try:
+        result = DocumentIndexingService(db).index(document_id)
+    except IndexingNotFoundError as exc:
+        raise _not_found() from exc
+    except IndexingEligibilityError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document indexing unavailable.") from exc
+    return IndexingResponse(
+        document_id=result.document.id,
+        status=result.document.status,
+        chunk_count=result.document.chunk_count,
+        embedding_model=result.embedding_model,
+        embedding_dimension=result.embedding_dimension,
+        indexing_error=result.document.indexing_error,
+    )
+
+
+@router.get("/{document_id}/chunks", response_model=DocumentChunkListResponse)
+def get_document_chunks(
+    document_id: UUID,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    db: Annotated[Session, Depends(get_db)] = None,
+    _: Annotated[User, Depends(require_admin)] = None,
+) -> DocumentChunkListResponse:
+    """Inspect ordered semantic chunks without returning vector values."""
+
+    try:
+        items, total = DocumentIndexingService(db).chunks(document_id, page, page_size)
+    except IndexingNotFoundError as exc:
+        raise _not_found() from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document chunks unavailable.") from exc
+    return DocumentChunkListResponse(
+        document_id=document_id,
+        items=[
+            {
+                "id": item.id,
+                "chunk_index": item.chunk_index,
+                "page_number": item.page_number,
+                "content": item.content,
+                "word_count": item.word_count,
+                "source_sequence_start": item.source_sequence_start,
+                "source_sequence_end": item.source_sequence_end,
+                "embedding_dimension": len(item.embedding) if item.embedding is not None else None,
+                "embedding_exists": item.embedding is not None,
+            }
+            for item in items
+        ],
         page=page,
         page_size=page_size,
         total=total,
